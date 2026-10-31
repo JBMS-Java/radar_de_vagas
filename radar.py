@@ -18,6 +18,8 @@ DEFAULT_DB_PATH = Path(os.environ.get(
     str(Path(__file__).parent / ".data" / "radar_vagas.db"),
 ))
 API_TIMEOUT = 20
+TRANSLATOR_URL = "https://api.cognitive.microsofttranslator.com/translate"
+TRANSLATION_CHAR_LIMIT = 50_000
 
 SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "AWS": ("aws", "amazon web services"),
@@ -193,6 +195,59 @@ def fetch_jobs(source: str) -> list[dict[str, Any]]:
     return [normalize(item) for item in items if isinstance(item, dict)]
 
 
+def translate_job_text(title: str, description: str) -> tuple[str, str]:
+    """Translate a job title and description to Brazilian Portuguese."""
+    api_key = os.environ.get("AZURE_TRANSLATOR_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Configure a variável de ambiente AZURE_TRANSLATOR_KEY para traduzir vagas."
+        )
+    if len(title) + len(description) > TRANSLATION_CHAR_LIMIT:
+        raise ValueError(
+            "O texto desta vaga excede o limite de caracteres aceito pelo tradutor."
+        )
+
+    texts = [title, description]
+    included = [(index, text) for index, text in enumerate(texts) if text]
+    if not included:
+        return title, description
+
+    headers = {
+        "Ocp-Apim-Subscription-Key": api_key,
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+    region = os.environ.get("AZURE_TRANSLATOR_REGION")
+    if region:
+        headers["Ocp-Apim-Subscription-Region"] = region
+
+    response = requests.post(
+        TRANSLATOR_URL,
+        params={"api-version": "3.0", "to": "pt-BR"},
+        headers=headers,
+        json=[{"Text": text} for _, text in included],
+        timeout=API_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list) or len(payload) != len(included):
+        raise ValueError("O serviço de tradução retornou uma resposta inválida.")
+
+    translated = list(texts)
+    for (index, _), result in zip(included, payload):
+        if not isinstance(result, dict):
+            raise ValueError("O serviço de tradução retornou uma resposta inválida.")
+        translations = result.get("translations")
+        if (
+            not isinstance(translations, list)
+            or not translations
+            or not isinstance(translations[0], dict)
+            or not isinstance(translations[0].get("text"), str)
+        ):
+            raise ValueError("O serviço de tradução retornou uma resposta inválida.")
+        translated[index] = translations[0]["text"]
+    return translated[0], translated[1]
+
+
 def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +286,19 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 name TEXT NOT NULL DEFAULT '',
                 target_role TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_translations (
+                source TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                original_title TEXT NOT NULL,
+                original_description TEXT NOT NULL,
+                translated_title TEXT NOT NULL,
+                translated_description TEXT NOT NULL,
+                PRIMARY KEY (source, source_id)
             )
             """
         )
@@ -287,8 +355,57 @@ def load_jobs(db_path: str | Path = DEFAULT_DB_PATH) -> pd.DataFrame:
     initialize_database(db_path)
     with sqlite3.connect(db_path) as connection:
         return pd.read_sql_query(
-            "SELECT * FROM jobs ORDER BY published_at DESC, imported_at DESC",
+            """
+            SELECT jobs.*,
+                CASE WHEN job_translations.original_title = jobs.title
+                    AND job_translations.original_description = jobs.description
+                    THEN job_translations.translated_title ELSE '' END
+                    AS translated_title,
+                CASE WHEN job_translations.original_title = jobs.title
+                    AND job_translations.original_description = jobs.description
+                    THEN job_translations.translated_description ELSE '' END
+                    AS translated_description
+            FROM jobs
+            LEFT JOIN job_translations
+                ON job_translations.source = jobs.source
+                AND job_translations.source_id = jobs.source_id
+            ORDER BY jobs.published_at DESC, jobs.imported_at DESC
+            """,
             connection,
+        )
+
+
+def save_job_translation(
+    source: str,
+    source_id: str,
+    original_title: str,
+    original_description: str,
+    translated_title: str,
+    translated_description: str,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO job_translations (
+                source, source_id, original_title, original_description,
+                translated_title, translated_description
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source, source_id) DO UPDATE SET
+                original_title = excluded.original_title,
+                original_description = excluded.original_description,
+                translated_title = excluded.translated_title,
+                translated_description = excluded.translated_description
+            """,
+            (
+                source,
+                source_id,
+                original_title,
+                original_description,
+                translated_title,
+                translated_description,
+            ),
         )
 
 
@@ -352,6 +469,7 @@ def filter_jobs(
     skill: str = "Todas",
     level: str = "Todos",
     modality: str = "Todas",
+    location: str = "",
 ) -> pd.DataFrame:
     filtered = jobs.copy()
     if filtered.empty:
@@ -366,6 +484,12 @@ def filter_jobs(
             axis=1,
         )
         filtered = filtered[mask]
+    if location.strip():
+        filtered = filtered[
+            filtered["location"].fillna("").apply(
+                lambda value: location.strip().casefold() in str(value).casefold()
+            )
+        ]
     if skill != "Todas":
         filtered = filtered[
             filtered["skills"].fillna("").apply(

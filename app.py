@@ -14,9 +14,11 @@ from radar import (
     load_user_profile,
     load_user_skills,
     save_jobs,
+    save_job_translation,
     save_user_profile,
     save_user_skills,
     skill_demand,
+    translate_job_text,
 )
 
 st.set_page_config(
@@ -26,39 +28,116 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+with st.sidebar:
+    dark_mode = st.toggle(
+        "Modo escuro",
+        help="Altere a aparência da interface.",
+    )
+
+theme_variables = (
+    ":root {\n"
+    f"  color-scheme: {'dark' if dark_mode else 'light'};\n"
+    f"  --radar-bg: {'#111827' if dark_mode else '#f7f9fc'};\n"
+    f"  --radar-panel: {'#1f2937' if dark_mode else '#ffffff'};\n"
+    f"  --radar-sidebar: {'#182233' if dark_mode else '#f0f4f8'};\n"
+    f"  --radar-text: {'#e5e7eb' if dark_mode else '#172b4d'};\n"
+    f"  --radar-muted: {'#a7b3c5' if dark_mode else '#64748b'};\n"
+    f"  --radar-border: {'#374151' if dark_mode else '#e4eaf1'};\n"
+    f"  --radar-chip-bg: {'#263b58' if dark_mode else '#edf4ff'};\n"
+    f"  --radar-chip-border: {'#3b5578' if dark_mode else '#d9e8fc'};\n"
+    f"  --radar-chip-text: {'#bfdbfe' if dark_mode else '#245c9a'};\n"
+    "}"
+)
+
 st.markdown(
     """
     <style>
-    .stApp {
-        background: linear-gradient(180deg, #f7f9fc 0%, #ffffff 40%);
+    THEME_VARIABLES
+    body, [data-testid="stAppViewContainer"] {
+        background: var(--radar-bg);
+        color: var(--radar-text);
+    }
+    [data-testid="stAppViewContainer"] .main .block-container {
+        max-width: 1440px;
+        padding-top: 2rem;
     }
     [data-testid="stHeader"] {
-        background: rgba(247, 249, 252, 0.8);
+        background: var(--radar-bg);
     }
     [data-testid="stSidebar"] {
-        background: #f0f4f8;
-        border-right: 1px solid #e4eaf1;
+        background: var(--radar-sidebar);
+        border-right: 1px solid var(--radar-border);
+    }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+    [data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] {
+        color: var(--radar-text);
+    }
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+    [data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] {
+        color: var(--radar-muted);
+    }
+    .stApp [data-baseweb="input"] > div,
+    .stApp [data-baseweb="select"] > div,
+    .stApp textarea {
+        background: var(--radar-panel);
+        border-color: var(--radar-border);
+        color: var(--radar-text);
+    }
+    .stApp [data-testid="stMultiSelect"] [role="group"],
+    .stApp [data-testid="stSelectbox"] [role="group"] {
+        background: var(--radar-panel);
+        border-color: var(--radar-border);
+        color: var(--radar-text);
+    }
+    .stApp input,
+    .stApp textarea,
+    .stApp [data-baseweb="select"] *,
+    .stApp [data-testid="stMultiSelect"] input,
+    .stApp [data-testid="stSelectbox"] input {
+        color: var(--radar-text);
+    }
+    [data-testid="stBaseLinkButton-secondary"] {
+        background: var(--radar-panel);
+        border-color: var(--radar-border);
+        color: var(--radar-text);
+    }
+    [data-testid="stExpander"] details,
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+        background: var(--radar-panel);
+        color: var(--radar-text);
+    }
+    [data-testid="stExpander"] details {
+        border: 1px solid var(--radar-border);
+        border-radius: 10px;
+    }
+    [data-testid="stExpander"] summary p,
+    [data-testid="stExpander"] [data-testid="stExpanderDetails"] p {
+        color: var(--radar-text);
+    }
+    [data-testid="stExpander"] summary:hover {
+        color: var(--radar-text);
     }
     [data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e7edf4;
+        background: var(--radar-panel);
+        border: 1px solid var(--radar-border);
         border-radius: 14px;
         padding: 18px 20px;
-        box-shadow: 0 3px 12px rgba(27, 47, 76, 0.04);
+        color: var(--radar-text);
     }
     [data-testid="stMetricLabel"] p {
-        color: #64748b;
+        color: var(--radar-muted);
         font-size: 0.9rem;
     }
     [data-testid="stMetricValue"] {
-        color: #172b4d;
+        color: var(--radar-text);
     }
     [data-testid="stVerticalBlockBorderWrapper"] {
-        border-color: #e7edf4;
+        border-color: var(--radar-border);
         border-radius: 14px;
     }
     .eyebrow {
-        color: #546b86;
+        color: var(--radar-muted);
         font-size: 0.78rem;
         font-weight: 700;
         letter-spacing: 0.12em;
@@ -66,7 +145,7 @@ st.markdown(
         margin-bottom: 0.3rem;
     }
     .hero-title {
-        color: #172b4d;
+        color: var(--radar-text);
         font-size: clamp(2rem, 4vw, 2.8rem);
         font-weight: 750;
         letter-spacing: -0.045em;
@@ -74,27 +153,27 @@ st.markdown(
         margin: 0;
     }
     .hero-copy {
-        color: #64748b;
+        color: var(--radar-muted);
         font-size: 1.05rem;
         margin-top: 0.65rem;
     }
     .section-copy {
-        color: #64748b;
+        color: var(--radar-muted);
         margin-top: -0.5rem;
         margin-bottom: 1rem;
     }
     .skill-chip {
         display: inline-block;
-        background: #edf4ff;
-        border: 1px solid #d9e8fc;
+        background: var(--radar-chip-bg);
+        border: 1px solid var(--radar-chip-border);
         border-radius: 999px;
-        color: #245c9a;
+        color: var(--radar-chip-text);
         font-size: 0.84rem;
         margin: 0.2rem 0.25rem 0.2rem 0;
         padding: 0.28rem 0.7rem;
     }
     </style>
-    """,
+    """.replace("THEME_VARIABLES", theme_variables),
     unsafe_allow_html=True,
 )
 
@@ -217,18 +296,24 @@ with jobs_tab:
     if jobs.empty:
         st.info("Nenhuma oportunidade importada ainda. Use **Atualizar oportunidades** no menu lateral para começar.")
     else:
-        filters = st.columns([2, 1, 1, 1])
-        query = filters[0].text_input(
+        search_filters = st.columns([1.5, 1])
+        query = search_filters[0].text_input(
             "Buscar",
             placeholder="Cargo, empresa ou tecnologia",
             key="job_search",
         )
-        selected_skill = filters[1].selectbox("Tecnologia", ["Todas", *all_skills])
-        selected_level = filters[2].selectbox(
+        location_query = search_filters[1].text_input(
+            "Localidade",
+            placeholder="Ex.: Brasil, São Paulo, Europa",
+            key="job_location",
+        )
+        filters = st.columns(3)
+        selected_skill = filters[0].selectbox("Tecnologia", ["Todas", *all_skills])
+        selected_level = filters[1].selectbox(
             "Nível",
             ["Todos", "Estágio", "Júnior", "Pleno", "Sênior", "Não informado"],
         )
-        selected_modality = filters[3].selectbox(
+        selected_modality = filters[2].selectbox(
             "Modalidade",
             ["Todas", "Remoto", "Híbrido", "Presencial / não informado"],
         )
@@ -238,6 +323,7 @@ with jobs_tab:
             skill=selected_skill,
             level=selected_level,
             modality=selected_modality,
+            location=location_query,
         )
         st.caption(f"{len(filtered)} oportunidade(s) encontradas")
         if filtered.empty:
@@ -246,7 +332,8 @@ with jobs_tab:
             for _, job in filtered.head(50).iterrows():
                 with st.container(border=True):
                     heading, action = st.columns([5, 1])
-                    heading.markdown(f"#### {job['title']}")
+                    title = str(job["translated_title"] or job["title"])
+                    heading.markdown(f"#### {title}")
                     heading.markdown(
                         f"**{html.escape(str(job['company']))}** &nbsp; · &nbsp; "
                         f"{html.escape(str(job['location']))}",
@@ -256,9 +343,9 @@ with jobs_tab:
                     if job["url"]:
                         action.link_button("Ver vaga ↗", job["url"], use_container_width=True)
                     details = st.columns(3)
-                    details[0].caption(f"🎯 {job['level']}")
-                    details[1].caption(f"📍 {job['modality']}")
-                    details[2].caption(f"Fonte: {job['source']}")
+                    details[0].caption(f"**Nível**  \n{job['level']}")
+                    details[1].caption(f"**Modalidade**  \n{job['modality']}")
+                    details[2].caption(f"**Fonte**  \n{job['source']}")
                     listed_skills = [item.strip() for item in job["skills"].split(",") if item.strip()]
                     if listed_skills:
                         chips = "".join(
@@ -266,8 +353,60 @@ with jobs_tab:
                             for skill in listed_skills
                         )
                         st.markdown(chips, unsafe_allow_html=True)
-                    with st.expander("Ler descrição"):
-                        st.write(job["description"] or "Descrição não disponível.")
+                    description = str(job["description"] or "")
+                    translated_description = str(job["translated_description"] or "")
+                    visible_description = translated_description or description
+                    if not visible_description:
+                        visible_description = "Descrição não disponível."
+                    summary = " ".join(visible_description.split())
+                    if len(summary) > 280:
+                        summary = summary[:277].rstrip() + "..."
+                    st.write(summary)
+                    with st.expander("Descrição completa"):
+                        if translated_description:
+                            st.caption("Tradução automática para português.")
+                            st.write(translated_description)
+                            with st.expander("Ver descrição original"):
+                                st.write(description or "Descrição não disponível.")
+                        else:
+                            st.write(description or "Descrição não disponível.")
+                            if description:
+                                st.caption(
+                                    "O título e a descrição serão enviados ao Microsoft "
+                                    "Translator; o serviço pode cobrar pelo uso."
+                                )
+                                translation_key = (
+                                    f"translate_{job['source']}_{job['source_id']}"
+                                )
+                                if st.button(
+                                    "Traduzir título e descrição para português",
+                                    key=translation_key,
+                                ):
+                                    try:
+                                        translated_title, translated_description = (
+                                            translate_job_text(
+                                                str(job["title"]),
+                                                description,
+                                            )
+                                        )
+                                        save_job_translation(
+                                            str(job["source"]),
+                                            str(job["source_id"]),
+                                            str(job["title"]),
+                                            description,
+                                            translated_title,
+                                            translated_description,
+                                            DEFAULT_DB_PATH,
+                                        )
+                                    except (
+                                        requests.RequestException,
+                                        ValueError,
+                                        RuntimeError,
+                                    ) as error:
+                                        st.error(f"Não foi possível traduzir a vaga: {error}")
+                                    else:
+                                        st.success("Tradução salva. Atualizando a vaga...")
+                                        st.rerun()
             if len(filtered) > 50:
                 st.caption("Exibindo 50 oportunidades. Refine os filtros para ver resultados mais específicos.")
 
